@@ -9,6 +9,7 @@
 ## 🔥 Updates
 
 * [2025-08-27] Release inference code and Edit3D-Bench.
+* [2025-11-25] Add text-condition pipeline.
 
 ## 📦 Installation
 
@@ -45,12 +46,27 @@ pip install /tmp/extensions/mip-splatting/submodules/diff-gaussian-rasterization
 
 ## 💡 Usage
 
-### Step 1 — Add encoder to pipeline
-After downloading "TRELLIS-image-large" model, we can find "sparse_structure_encoder" in ckpts/ss_enc_conv3d_16l8_fp16.safetensors and "slat_encoder" in ckpts/slat_enc_swin8_B_64l8_fp16.safetensors.
-
-Before using these two encoders, we should add
-{"sparse_structure_encoder": "ckpts/ss_enc_conv3d_16l8_fp16", "slat_encoder": "ckpts/slat_enc_swin8_B_64l8_fp16"}
-in pipeline.json, then the pipeline can correctly call them.
+### Step 1 — Modify pipeline.json
+#### Image-condition pipeline:
+Download the **TRELLIS-image-large** model, and add the following entries to `pipeline.json`:
+```json
+{
+    "sparse_structure_encoder": "ckpts/ss_enc_conv3d_16l8_fp16",
+    "slat_encoder": "ckpts/slat_enc_swin8_B_64l8_fp16"
+}
+```
+#### Text-condition pipeline:
+Download both **TRELLIS-image-large** and **TRELLIS-text-large** model, and add the following entries to `TRELLIS-text-large/pipeline.json`:
+```json
+{
+    "sparse_structure_encoder": "path/to/TRELLIS-image-large/ckpts/ss_enc_conv3d_16l8_fp16",
+    "sparse_structure_decoder": "path/to/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16",
+    "slat_encoder": "path/to/TRELLIS-image-large/ckpts/slat_enc_swin8_B_64l8_fp16",
+    "slat_decoder_gs": "path/to/TRELLIS-image-large/ckpts/slat_dec_gs_swin8_B_64l8gs32_fp16",
+    "slat_decoder_rf": "path/to/TRELLIS-image-large/ckpts/slat_dec_rf_swin8_B_64l8r16_fp16",
+    "slat_decoder_mesh": "path/to/TRELLIS-image-large/ckpts/slat_dec_mesh_swin8_B_64l8m256c_fp16",
+}
+```
 
 ### Step 2 — Create a 3D mask
 Prepare a mesh that marks the editable region (e.g. `assets/example/mask.glb`).  
@@ -61,7 +77,8 @@ Inputs required (example):
 - `assets/example/model.glb` — original 3D asset  
 - `assets/example/mask.glb` — mask mesh  
 
-### Step 3 — Render RGB views & masks
+### Step 3 — Render and inpaint (Image-condition pipeline Only)
+#### Render RGB views & masks
 ```bash
 python utils/render_rgb_and_mask.py \
 --source_model assets/example/model.glb \
@@ -69,7 +86,7 @@ python utils/render_rgb_and_mask.py \
 --output_dir outputs
 ```
 
-### Step 4 — Inpaint the rendered views
+#### Inpaint the rendered views
 ```bash
 python utils/inpaint.py \
 --image_path outputs/images/render_0002.png \
@@ -79,12 +96,24 @@ python utils/inpaint.py \
 ```
 
 ### Step 5 — Run inference
+#### Image-condition pipeline:
 ```bash
 python inference.py \
 --input_model assets/example/model.glb \
---mask_model assets/example/mask.glb \
---image_dir outputs/images \
---output_dir outputs
+--mask_glb assets/example/mask.glb \
+--output_dir outputs \
+--image_dir outputs/images
+```
+
+#### Text-condition pipeline:
+```bash
+python inference.py \
+--input_model assets/example/model.glb \
+--mask_glb assets/example/mask.glb \
+--output_dir outputs \
+--is_text True \
+--source_prompt "A boy." \
+--target_prompt "A dog."
 ```
 
 ## Evaluation
