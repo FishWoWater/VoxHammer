@@ -1,11 +1,11 @@
+import os
+import bpy
 import json
 import math
-import os
-from typing import Dict, Tuple
-
-import bpy
 import numpy as np
+
 from mathutils import Vector
+from typing import Dict, Tuple
 
 
 def sphere_hammersley_sequence(n, num_samples, offset=(0, 0)):
@@ -36,16 +36,8 @@ def sphere_hammersley_sequence(n, num_samples, offset=(0, 0)):
     phi = v * 2 * np.pi
     return [phi, theta]
 
-
 class BpyRenderer:
-
-    def __init__(
-        self,
-        resolution: int = 512,
-        engine: str = "CYCLES",
-        geo_mode: bool = False,
-        split_normal: bool = False,
-    ):
+    def __init__(self, resolution: int = 512, engine: str = "CYCLES", geo_mode: bool = False, split_normal: bool = False):
         self.resolution = resolution
         self.engine = engine
         self.geo_mode = geo_mode
@@ -66,7 +58,6 @@ class BpyRenderer:
             "abc": bpy.ops.wm.alembic_import,
             "blend": bpy.ops.wm.append,
         }
-
         return import_functions
 
     def init_render_settings(self):
@@ -77,7 +68,6 @@ class BpyRenderer:
         bpy.context.scene.render.image_settings.file_format = "PNG"
         bpy.context.scene.render.image_settings.color_mode = "RGBA"
         bpy.context.scene.render.film_transparent = True
-
         if self.engine == "CYCLES":
             bpy.context.scene.render.engine = "CYCLES"
             bpy.context.scene.cycles.samples = 128 if not self.geo_mode else 1
@@ -85,33 +75,23 @@ class BpyRenderer:
             bpy.context.scene.cycles.filter_width = 1
             bpy.context.scene.cycles.diffuse_bounces = 1
             bpy.context.scene.cycles.glossy_bounces = 1
-            bpy.context.scene.cycles.transparent_max_bounces = (
-                3 if not self.geo_mode else 0
-            )
-            bpy.context.scene.cycles.transmission_bounces = (
-                3 if not self.geo_mode else 1
-            )
+            bpy.context.scene.cycles.transparent_max_bounces = (3 if not self.geo_mode else 0)
+            bpy.context.scene.cycles.transmission_bounces = (3 if not self.geo_mode else 1)
             bpy.context.scene.cycles.use_denoising = True
-
             try:
                 bpy.context.scene.cycles.device = "GPU"
                 bpy.context.preferences.addons["cycles"].preferences.get_devices()
-                bpy.context.preferences.addons[
-                    "cycles"
-                ].preferences.compute_device_type = "CUDA"
+                bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "CUDA"
             except:
                 pass
 
     def init_scene(self):
         for obj in bpy.data.objects:
             bpy.data.objects.remove(obj, do_unlink=True)
-
         for material in bpy.data.materials:
             bpy.data.materials.remove(material, do_unlink=True)
-
         for texture in bpy.data.textures:
             bpy.data.textures.remove(texture, do_unlink=True)
-
         for image in bpy.data.images:
             bpy.data.images.remove(image, do_unlink=True)
 
@@ -120,16 +100,13 @@ class BpyRenderer:
         bpy.context.collection.objects.link(cam)
         bpy.context.scene.camera = cam
         cam.data.sensor_height = cam.data.sensor_width = 32
-
         cam_constraint = cam.constraints.new(type="TRACK_TO")
         cam_constraint.track_axis = "TRACK_NEGATIVE_Z"
         cam_constraint.up_axis = "UP_Y"
-
         cam_empty = bpy.data.objects.new("Empty", None)
         cam_empty.location = (0, 0, 0)
         bpy.context.scene.collection.objects.link(cam_empty)
         cam_constraint.target = cam_empty
-
         return cam
 
     def init_lighting(self):
@@ -137,52 +114,35 @@ class BpyRenderer:
         bpy.ops.object.select_by_type(type="LIGHT")
         bpy.ops.object.delete()
 
-        default_light = bpy.data.objects.new(
-            "Default_Light", bpy.data.lights.new("Default_Light", type="POINT")
-        )
+        default_light = bpy.data.objects.new("Default_Light", bpy.data.lights.new("Default_Light", type="POINT"))
         bpy.context.collection.objects.link(default_light)
         default_light.data.energy = 1000
         default_light.location = (4, 1, 6)
         default_light.rotation_euler = (0, 0, 0)
 
-        top_light = bpy.data.objects.new(
-            "Top_Light", bpy.data.lights.new("Top_Light", type="AREA")
-        )
+        top_light = bpy.data.objects.new("Top_Light", bpy.data.lights.new("Top_Light", type="AREA"))
         bpy.context.collection.objects.link(top_light)
         top_light.data.energy = 10000
         top_light.location = (0, 0, 10)
         top_light.scale = (100, 100, 100)
 
-        bottom_light = bpy.data.objects.new(
-            "Bottom_Light", bpy.data.lights.new("Bottom_Light", type="AREA")
-        )
+        bottom_light = bpy.data.objects.new("Bottom_Light", bpy.data.lights.new("Bottom_Light", type="AREA"))
         bpy.context.collection.objects.link(bottom_light)
         bottom_light.data.energy = 1000
         bottom_light.location = (0, 0, -10)
         bottom_light.rotation_euler = (0, 0, 0)
-
-        return {
-            "default_light": default_light,
-            "top_light": top_light,
-            "bottom_light": bottom_light,
-        }
+        return {"default_light": default_light, "top_light": top_light, "bottom_light": bottom_light}
 
     def load_object(self, object_path: str):
         file_extension = object_path.split(".")[-1].lower()
-
         if file_extension not in self.import_functions:
             raise ValueError(f"Unsupported file type: {file_extension}")
-
         import_function = self.import_functions[file_extension]
-
         print(f"Loading object from {object_path}")
-
         if file_extension == "blend":
             import_function(directory=object_path, link=False)
         elif file_extension in {"glb", "gltf"}:
-            import_function(
-                filepath=object_path, merge_vertices=True, import_shading="NORMALS"
-            )
+            import_function(filepath=object_path, merge_vertices=True, import_shading="NORMALS")
         else:
             import_function(filepath=object_path)
 
@@ -195,10 +155,7 @@ class BpyRenderer:
                 obj.hide_select = False
                 obj.select_set(True)
         bpy.ops.object.delete()
-
-        invisible_collections = [
-            col for col in bpy.data.collections if col.hide_viewport
-        ]
+        invisible_collections = [col for col in bpy.data.collections if col.hide_viewport]
         for col in invisible_collections:
             bpy.data.collections.remove(col)
 
@@ -208,9 +165,7 @@ class BpyRenderer:
 
     def convert_to_meshes(self):
         bpy.ops.object.select_all(action="DESELECT")
-        bpy.context.view_layer.objects.active = [
-            obj for obj in bpy.context.scene.objects if obj.type == "MESH"
-        ][0]
+        bpy.context.view_layer.objects.active = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"][0]
         for obj in bpy.context.scene.objects:
             obj.select_set(True)
         bpy.ops.object.convert(target="MESH")
@@ -261,12 +216,7 @@ class BpyRenderer:
         bbox_min = (math.inf,) * 3
         bbox_max = (-math.inf,) * 3
         found = False
-
-        scene_meshes = [
-            obj
-            for obj in bpy.context.scene.objects.values()
-            if isinstance(obj.data, bpy.types.Mesh)
-        ]
+        scene_meshes = [obj for obj in bpy.context.scene.objects.values() if isinstance(obj.data, bpy.types.Mesh)]
         for obj in scene_meshes:
             found = True
             for coord in obj.bound_box:
@@ -274,21 +224,15 @@ class BpyRenderer:
                 coord = obj.matrix_world @ coord
                 bbox_min = tuple(min(x, y) for x, y in zip(bbox_min, coord))
                 bbox_max = tuple(max(x, y) for x, y in zip(bbox_max, coord))
-
         if not found:
             raise RuntimeError("no objects in scene to compute bounding box for")
-
         return Vector(bbox_min), Vector(bbox_max)
 
     def normalize_scene(self) -> Tuple[float, Vector]:
-        scene_root_objects = [
-            obj for obj in bpy.context.scene.objects.values() if not obj.parent
-        ]
-
+        scene_root_objects = [obj for obj in bpy.context.scene.objects.values() if not obj.parent]
         if len(scene_root_objects) > 1:
             scene = bpy.data.objects.new("ParentEmpty", None)
             bpy.context.scene.collection.objects.link(scene)
-
             for obj in scene_root_objects:
                 obj.parent = scene
         else:
@@ -298,13 +242,11 @@ class BpyRenderer:
         print(f"[INFO] Bounding box: {bbox_min}, {bbox_max}")
         scale = 1 / max(bbox_max - bbox_min)
         scene.scale = scene.scale * scale
-
         bpy.context.view_layer.update()
         bbox_min, bbox_max = self.scene_bbox()
         offset = -(bbox_min + bbox_max) / 2
         scene.matrix_world.translation += offset
         bpy.ops.object.select_all(action="DESELECT")
-
         return scale, offset
 
     def get_transform_matrix(self, obj: bpy.types.Object) -> list:
@@ -320,19 +262,9 @@ class BpyRenderer:
         matrix.append([0, 0, 0, 1])
         return matrix
 
-    def render_object(
-        self,
-        file_path: str,
-        output_dir: str,
-        num_views: int = 150,
-        scale: float = 1.0,
-        offset: Vector = None,
-        save_mesh: bool = True,
-    ) -> Dict:
+    def render_object(self, file_path: str, output_dir: str, num_views: int = 150, scale: float = 1.0, offset: Vector = None, save_mesh: bool = True) -> Dict:
         os.makedirs(output_dir, exist_ok=True)
-
         self.init_render_settings()
-
         if file_path.endswith(".blend"):
             self.delete_invisible_objects()
         else:
@@ -341,40 +273,29 @@ class BpyRenderer:
             if self.split_normal:
                 self.split_mesh_normal()
             # delete_custom_normals()
-
         print("[INFO] Scene initialized.")
 
         if offset is None:
             scale, offset = self.normalize_scene()
             print(f"[INFO] Scene normalized with auto scale: {scale}, offset: {offset}")
         else:
-            scene_root_objects = [
-                obj for obj in bpy.context.scene.objects.values() if not obj.parent
-            ]
-
+            scene_root_objects = [obj for obj in bpy.context.scene.objects.values() if not obj.parent]
             if len(scene_root_objects) > 1:
                 scene = bpy.data.objects.new("ParentEmpty", None)
                 bpy.context.scene.collection.objects.link(scene)
-
                 for obj in scene_root_objects:
                     obj.parent = scene
             else:
                 scene = scene_root_objects[0]
-
             scene.scale = scene.scale * scale
-
             bpy.context.view_layer.update()
             scene.matrix_world.translation += offset
             bpy.ops.object.select_all(action="DESELECT")
-
-            print(
-                f"[INFO] Scene scaled with specified scale: {scale}, offset: {offset}"
-            )
+            print(f"[INFO] Scene scaled with specified scale: {scale}, offset: {offset}")
 
         cam = self.init_camera()
         self.init_lighting()
         print("[INFO] Camera and lighting initialized.")
-
         if self.geo_mode:
             self.override_material()
 
@@ -385,14 +306,9 @@ class BpyRenderer:
             y, p = sphere_hammersley_sequence(i, num_views, offset_random)
             yaws.append(y)
             pitchs.append(p)
-
         radius = [2] * num_views
         fov = [40 / 180 * np.pi] * num_views
-        views = [
-            {"yaw": y, "pitch": p, "radius": r, "fov": f}
-            for y, p, r, f in zip(yaws, pitchs, radius, fov)
-        ]
-
+        views = [{"yaw": y, "pitch": p, "radius": r, "fov": f} for y, p, r, f in zip(yaws, pitchs, radius, fov)]
         to_export = {
             "aabb": [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
             "scale": scale,
@@ -407,19 +323,15 @@ class BpyRenderer:
                 view["radius"] * np.sin(view["pitch"]),
             )
             cam.data.lens = 16 / np.tan(view["fov"] / 2)
-
             bpy.context.scene.render.filepath = os.path.join(output_dir, f"{i:03d}.png")
-
             bpy.ops.render.render(write_still=True)
             bpy.context.view_layer.update()
-
             metadata = {
                 "file_path": f"{i:03d}.png",
                 "camera_angle_x": view["fov"],
                 "transform_matrix": self.get_transform_matrix(cam),
             }
             to_export["frames"].append(metadata)
-
         with open(os.path.join(output_dir, "transforms.json"), "w") as f:
             json.dump(to_export, f, indent=4)
 
@@ -430,7 +342,6 @@ class BpyRenderer:
                 self.convert_to_meshes()
                 self.triangulate_meshes()
                 print("[INFO] Meshes triangulated.")
-
                 ply_path = os.path.join(output_dir, "mesh.ply")
                 try:
                     bpy.ops.wm.ply_export(filepath=ply_path)
@@ -442,12 +353,9 @@ class BpyRenderer:
                         mesh_file_path = ply_path
                         print("[INFO] Mesh file saved.")
                     except AttributeError:
-                        print(
-                            "[WARNING] PLY export not available, skipping mesh export"
-                        )
+                        print("[WARNING] PLY export not available, skipping mesh export")
             except Exception as e:
                 print(f"[WARNING] Mesh export failed: {e}")
-
         return {
             "rendered": True,
             "num_views": num_views,
@@ -456,30 +364,9 @@ class BpyRenderer:
             "mesh_file": mesh_file_path,
         }
 
-
-def render_3d_model(
-    file_path: str,
-    output_dir: str,
-    num_views: int = 150,
-    scale: float = 1.0,
-    offset: Vector = None,
-    resolution: int = 512,
-    engine: str = "CYCLES",
-    geo_mode: bool = False,
-    split_normal: bool = False,
-    save_mesh: bool = True,
-) -> Dict:
-
-    renderer = BpyRenderer(
-        resolution=resolution,
-        engine=engine,
-        geo_mode=geo_mode,
-        split_normal=split_normal,
-    )
-    return renderer.render_object(
-        file_path, output_dir, num_views, scale, offset, save_mesh
-    )
-
+def render_3d_model(file_path: str, output_dir: str, num_views: int = 150, scale: float = 1.0, offset: Vector = None, resolution: int = 512, engine: str = "CYCLES", geo_mode: bool = False, split_normal: bool = False, save_mesh: bool = True) -> Dict:
+    renderer = BpyRenderer(resolution=resolution, engine=engine, geo_mode=geo_mode, split_normal=split_normal)
+    return renderer.render_object(file_path, output_dir, num_views, scale, offset, save_mesh)
 
 if __name__ == "__main__":
     file_path = "path/to/model"
