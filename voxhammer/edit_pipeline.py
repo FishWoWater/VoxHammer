@@ -1,26 +1,24 @@
 import os
-import sys
-
 os.environ["ATTN_BACKEND"] = "sdpa"
 os.environ["SPCONV_ALGO"] = "native"
 
-from types import MethodType
-from typing import *
-
-import numpy as np
 import rembg
 import torch
+import utils3d
+import numpy as np
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-import utils3d
+
+from typing import *
 from PIL import Image
 from tqdm import tqdm
+from types import MethodType
 
 import trellis.modules.sparse as sp
-from trellis.modules.spatial import patchify, unpatchify
-from trellis.pipelines import TrellisImageTo3DPipeline
-from trellis.pipelines.samplers.flow_euler import FlowEulerGuidanceIntervalSampler
 from trellis.utils import postprocessing_utils
+from trellis.modules.spatial import patchify, unpatchify
+from trellis.pipelines import TrellisTextTo3DPipeline, TrellisImageTo3DPipeline
+from trellis.pipelines.samplers.flow_euler import FlowEulerGuidanceIntervalSampler
 
 
 def ply_to_coords(ply_path):
@@ -28,29 +26,19 @@ def ply_to_coords(ply_path):
     coords = ((torch.tensor(position) + 0.5) * 64).int().contiguous().cuda()
     return coords
 
-
 def coords_to_voxel(coords):
     voxel = torch.zeros(1, 1, 64, 64, 64, dtype=torch.float)
     voxel[:, 0, coords[:, 0], coords[:, 1], coords[:, 2]] = 1
     return voxel.cuda()
 
-
 def feats_to_slat(pipeline, feats_path):
     feats = np.load(feats_path)
     feats_tensor = sp.SparseTensor(
         feats=torch.from_numpy(feats["patchtokens"]).float(),
-        coords=torch.cat(
-            [
-                torch.zeros(feats["patchtokens"].shape[0], 1).int(),
-                torch.from_numpy(feats["indices"]).int(),
-            ],
-            dim=1,
-        ),
-    ).cuda()
+        coords=torch.cat([torch.zeros(feats["patchtokens"].shape[0], 1).int(), torch.from_numpy(feats["indices"]).int()], dim=1)).cuda()
     feats_encoder = pipeline.models["slat_encoder"]
     slat = feats_encoder(feats_tensor, sample_posterior=False)
     return slat
-
 
 def image_rgb(img_path):
     image = Image.open(img_path)
@@ -61,15 +49,12 @@ def image_rgb(img_path):
         background = Image.new("RGB", image.size, (255, 255, 255))
         background.paste(image, mask=image.split()[3])
         image_rgb = background
-
     return image_rgb
-
 
 def preprocess_image(img_src_path, img_tgt_path, img_mask_path):
     img_src = image_rgb(img_src_path)
     img_tgt = image_rgb(img_tgt_path)
     img_mask = Image.open(img_mask_path).convert("L")
-
     max_size = max(img_src.size)
     scale = min(1, 1024 / max_size)
     resize_size = (int(img_src.width * scale), int(img_src.height * scale))
@@ -94,12 +79,7 @@ def preprocess_image(img_src_path, img_tgt_path, img_mask_path):
     center = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
     size = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
     size = int(size * 1.2)
-    bbox = (
-        center[0] - size // 2,
-        center[1] - size // 2,
-        center[0] + size // 2,
-        center[1] + size // 2,
-    )
+    bbox = (center[0] - size // 2, center[1] - size // 2, center[0] + size // 2, center[1] + size // 2,)
     pre_img_src = pre_img_src.crop(bbox)
     pre_img_tgt = pre_img_tgt.crop(bbox)
     pre_img_mask = img_mask.crop(bbox)
@@ -113,7 +93,6 @@ def preprocess_image(img_src_path, img_tgt_path, img_mask_path):
     pre_img_src = Image.fromarray((pre_img_src * 255).astype(np.uint8))
     pre_img_tgt = Image.fromarray((pre_img_tgt * 255).astype(np.uint8))
     return pre_img_src, pre_img_tgt, pre_img_mask
-
 
 def ply_to_ss_mask(coords_mask, pre_mask):
     voxel_mask = torch.ones(1, 1, 64, 64, 64, dtype=torch.float)
@@ -136,26 +115,25 @@ def ply_to_ss_mask(coords_mask, pre_mask):
     ss_self_kv_mask = ss_self_kv_mask.reshape(1, 4096, 16, 64)
     ss_self_kv_mask = ss_self_kv_mask.permute(0, 2, 1, 3).contiguous().float().cuda()
 
-    img_mask = transforms.ToTensor()(pre_mask)
-    img_mask = (img_mask > 0).float()
-    cross_kv_mask = img_mask.reshape(37, 14, 37, 14)
-    cross_kv_mask = cross_kv_mask.permute(1, 3, 0, 2)
-    cross_kv_mask = cross_kv_mask.reshape(1, 196, 37, 37)
-    cross_kv_mask = cross_kv_mask.any(dim=1, keepdim=True)
-    cross_kv_mask = cross_kv_mask.repeat(1, 1024, 1, 1)
-    cross_kv_mask = cross_kv_mask.reshape(1, 1024, 1369)
-    cross_kv_mask = cross_kv_mask.permute(0, 2, 1)
-    cross_kv_mask = torch.cat((torch.ones(1, 5, 1024), cross_kv_mask), dim=1)
-    cross_kv_mask = cross_kv_mask.reshape(1, 1374, 16, 64)
-    cross_kv_mask = cross_kv_mask.permute(0, 2, 1, 3).contiguous().float().cuda()
-
+    if pre_mask is None:
+        cross_kv_mask = None
+    else:
+        img_mask = transforms.ToTensor()(pre_mask)
+        img_mask = (img_mask > 0).float()
+        cross_kv_mask = img_mask.reshape(37, 14, 37, 14)
+        cross_kv_mask = cross_kv_mask.permute(1, 3, 0, 2)
+        cross_kv_mask = cross_kv_mask.reshape(1, 196, 37, 37)
+        cross_kv_mask = cross_kv_mask.any(dim=1, keepdim=True)
+        cross_kv_mask = cross_kv_mask.repeat(1, 1024, 1, 1)
+        cross_kv_mask = cross_kv_mask.reshape(1, 1024, 1369)
+        cross_kv_mask = cross_kv_mask.permute(0, 2, 1)
+        cross_kv_mask = torch.cat((torch.ones(1, 5, 1024), cross_kv_mask), dim=1)
+        cross_kv_mask = cross_kv_mask.reshape(1, 1374, 16, 64)
+        cross_kv_mask = cross_kv_mask.permute(0, 2, 1, 3).contiguous().float().cuda()
     return voxel_mask, ss_latent_mask, ss_self_kv_mask, cross_kv_mask
 
-
 def ply_to_slat_mask(coords_tgt, coords_mask):
-    coords_mask = torch.cat(
-        [torch.zeros(coords_mask.shape[0], 1).int().cuda(), coords_mask], dim=1
-    )
+    coords_mask = torch.cat([torch.zeros(coords_mask.shape[0], 1).int().cuda(), coords_mask], dim=1)
     factor = (2, 2, 2)
     coord_tgt = list(coords_tgt.unbind(dim=-1))
     coord_mask = list(coords_mask.unbind(dim=-1))
@@ -168,33 +146,12 @@ def ply_to_slat_mask(coords_tgt, coords_mask):
     code_mask = sum([c * o for c, o in zip(coord_mask, OFFSET)])
     code_tgt, idx_tgt = code_tgt.unique(return_inverse=True)
     code_mask, idx_mask = code_mask.unique(return_inverse=True)
-    new_coords_tgt = torch.stack(
-        [code_tgt // OFFSET[0]]
-        + [(code_tgt // OFFSET[i + 1]) % MAX[i] for i in range(3)],
-        dim=-1,
-    )
-    new_coords_mask = torch.stack(
-        [code_mask // OFFSET[0]]
-        + [(code_mask // OFFSET[i + 1]) % MAX[i] for i in range(3)],
-        dim=-1,
-    )
+    new_coords_tgt = torch.stack([code_tgt // OFFSET[0]] + [(code_tgt // OFFSET[i + 1]) % MAX[i] for i in range(3)], dim=-1)
+    new_coords_mask = torch.stack([code_mask // OFFSET[0]] + [(code_mask // OFFSET[i + 1]) % MAX[i] for i in range(3)], dim=-1)
     slat_self_kv_mask = new_coords_mask.contiguous().cuda()
-
     return slat_self_kv_mask
 
-
-def ss_attn_forward(
-    self,
-    x,
-    context=None,
-    indices=None,
-    ss_kv=None,
-    kv_mask=None,
-    t_latent=None,
-    order=None,
-    pos=None,
-    layer=None,
-):
+def ss_attn_forward(self, x, context=None, indices=None, ss_kv=None, kv_mask=None, t_latent=None, order=None, pos=None, layer=None, is_text=False):
     B, L, C = x.shape
     if self._type == "self":
         qkv = self.to_qkv(x)
@@ -209,78 +166,39 @@ def ss_attn_forward(
         q = q.reshape(B, L, self.num_heads, -1)
         kv = kv.reshape(B, Lkv, 2, self.num_heads, -1)
         k, v = kv.unbind(dim=2)
-
     if self.qk_rms_norm:
         q = self.q_rms_norm(q)
         k = self.k_rms_norm(k)
     q = q.permute(0, 2, 1, 3)
     k = k.permute(0, 2, 1, 3)
     v = v.permute(0, 2, 1, 3)
-    if kv_mask is None:
-        ss_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"] = k.cpu()
-        ss_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"] = v.cpu()
-    else:
-        k = k * kv_mask + ss_kv[
-            f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"
-        ].cuda() * (1 - kv_mask)
-        v = v * kv_mask + ss_kv[
-            f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"
-        ].cuda() * (1 - kv_mask)
-        k = k.type(q.dtype)
-        v = v.type(q.dtype)
+    if not (is_text and (self._type != "self")):
+        if kv_mask is None:
+            ss_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"] = k.cpu()
+            ss_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"] = v.cpu()
+        else:
+            k = k * kv_mask + ss_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"].cuda() * (1 - kv_mask)
+            v = v * kv_mask + ss_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"].cuda() * (1 - kv_mask)
+            k = k.type(q.dtype)
+            v = v.type(q.dtype)
     h = F.scaled_dot_product_attention(q, k, v)
     h = h.permute(0, 2, 1, 3)
     h = h.reshape(B, L, -1)
     h = self.to_out(h)
     return h
 
-
-def ss_trsfmr_forward(
-    self,
-    x,
-    mod,
-    context,
-    ss_kv,
-    self_kv_mask,
-    cross_kv_mask,
-    t_latent,
-    order,
-    pos,
-    layer,
-):
+def ss_trsfmr_forward(self, x, mod, context, ss_kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, layer, is_text):
     if self.share_mod:
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod.chunk(
-            6, dim=1
-        )
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod.chunk(6, dim=1)
     else:
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.adaLN_modulation(mod).chunk(6, dim=1)
-        )
-
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(mod).chunk(6, dim=1)
     h = self.norm1(x)
     h = h * (1 + scale_msa.unsqueeze(1)) + shift_msa.unsqueeze(1)
-    h = self.self_attn(
-        h,
-        ss_kv=ss_kv,
-        kv_mask=self_kv_mask,
-        t_latent=t_latent,
-        order=order,
-        pos=pos,
-        layer=layer,
-    )
+    h = self.self_attn(h, ss_kv=ss_kv, kv_mask=self_kv_mask, t_latent=t_latent, order=order, pos=pos, layer=layer, is_text=is_text)
     h = h * gate_msa.unsqueeze(1)
     x = x + h
     h = self.norm2(x)
-    h = self.cross_attn(
-        h,
-        context,
-        ss_kv=ss_kv,
-        kv_mask=cross_kv_mask,
-        t_latent=t_latent,
-        order=order,
-        pos=pos,
-        layer=layer,
-    )
+    h = self.cross_attn(h, context, ss_kv=ss_kv, kv_mask=cross_kv_mask, t_latent=t_latent, order=order, pos=pos, layer=layer, is_text=is_text)
     x = x + h
     h = self.norm3(x)
     h = h * (1 + scale_mlp.unsqueeze(1)) + shift_mlp.unsqueeze(1)
@@ -289,15 +207,9 @@ def ss_trsfmr_forward(
     x = x + h
     return x
 
-
-def ss_flow_forward(
-    self, x, t, cond, ss_kv, self_kv_mask, cross_kv_mask, t_latent, order, pos
-):
-    assert [*x.shape] == [
-        x.shape[0],
-        self.in_channels,
-        *[self.resolution] * 3,
-    ], f"Input shape mismatch, got {x.shape}, expected {[x.shape[0], self.in_channels, *[self.resolution] * 3]}"
+def ss_flow_forward(self, x, t, cond, ss_kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, is_text):
+    assert [*x.shape] == [x.shape[0], self.in_channels, *[self.resolution] * 3], \
+        f"Input shape mismatch, got {x.shape}, expected {[x.shape[0], self.in_channels, *[self.resolution] * 3]}"
     h = patchify(x, self.patch_size)
     h = h.view(*h.shape[:2], -1).permute(0, 2, 1).contiguous()
     h = self.input_layer(h)
@@ -309,39 +221,15 @@ def ss_flow_forward(
     h = h.type(self.dtype)
     cond = cond.type(self.dtype)
     for layer, block in enumerate(self.blocks):
-        h = block(
-            h,
-            t_emb,
-            cond,
-            ss_kv,
-            self_kv_mask,
-            cross_kv_mask,
-            t_latent,
-            order,
-            pos,
-            layer,
-        )
+        h = block(h, t_emb, cond, ss_kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, layer, is_text)
     h = h.type(x.dtype)
     h = F.layer_norm(h, h.shape[-1:])
     h = self.out_layer(h)
-    h = h.permute(0, 2, 1).view(
-        h.shape[0], h.shape[2], *[self.resolution // self.patch_size] * 3
-    )
+    h = h.permute(0, 2, 1).view(h.shape[0], h.shape[2], *[self.resolution // self.patch_size] * 3)
     h = unpatchify(h, self.patch_size).contiguous()
     return h
 
-
-def slat_attn_forward(
-    self,
-    x,
-    context=None,
-    slat_kv=None,
-    kv_mask=None,
-    t_latent=None,
-    order=None,
-    pos=None,
-    layer=None,
-):
+def slat_attn_forward(self, x, context=None, slat_kv=None, kv_mask=None, t_latent=None, order=None, pos=None, layer=None, is_text=False):
     if self._type == "self":
         qkv = self._linear(self.to_qkv, x)
         qkv = self._fused_pre(qkv, num_fused=3)
@@ -356,34 +244,20 @@ def slat_attn_forward(
             slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"] = v.cpu()
         else:
             match_1_k = (k.coords.unsqueeze(1) == kv_mask.unsqueeze(0)).all(dim=-1)
-            match_2_k = (
-                slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"]
-                .coords.cuda()
-                .unsqueeze(1)
-                == kv_mask.unsqueeze(0)
-            ).all(dim=-1)
+            match_2_k = (slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"].coords.cuda().unsqueeze(1) == kv_mask.unsqueeze(0)).all(dim=-1)
             idx_1_k = match_1_k.float().argmax(0)
             idx_2_k = match_2_k.float().argmax(0)
             feats_k = k.feats.clone()
-            feats_k[idx_1_k] = slat_kv[
-                f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"
-            ].feats.cuda()[idx_2_k]
+            feats_k[idx_1_k] = slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"].feats.cuda()[idx_2_k]
             k = k.replace(feats_k)
             k = k.type(q.dtype)
 
             match_1_v = (v.coords.unsqueeze(1) == kv_mask.unsqueeze(0)).all(dim=-1)
-            match_2_v = (
-                slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"]
-                .coords.cuda()
-                .unsqueeze(1)
-                == kv_mask.unsqueeze(0)
-            ).all(dim=-1)
+            match_2_v = (slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"].coords.cuda().unsqueeze(1) == kv_mask.unsqueeze(0)).all(dim=-1)
             idx_1_v = match_1_v.float().argmax(0)
             idx_2_v = match_2_v.float().argmax(0)
             feats_v = v.feats.clone()
-            feats_v[idx_1_v] = slat_kv[
-                f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"
-            ].feats.cuda()[idx_2_v]
+            feats_v[idx_1_v] = slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"].feats.cuda()[idx_2_v]
             v = v.replace(feats_v)
             v = v.type(q.dtype)
         h = q
@@ -408,18 +282,15 @@ def slat_attn_forward(
         q = q.permute(0, 2, 1, 3)
         k = k.permute(0, 2, 1, 3)
         v = v.permute(0, 2, 1, 3)
-        if kv_mask is None:
-            slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"] = k.cpu()
-            slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"] = v.cpu()
-        else:
-            k = k * kv_mask + slat_kv[
-                f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"
-            ].cuda() * (1 - kv_mask)
-            v = v * kv_mask + slat_kv[
-                f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"
-            ].cuda() * (1 - kv_mask)
-            k = k.type(q.dtype)
-            v = v.type(q.dtype)
+        if not is_text:
+            if kv_mask is None:
+                slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"] = k.cpu()
+                slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"] = v.cpu()
+            else:
+                k = k * kv_mask + slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"].cuda() * (1 - kv_mask)
+                v = v * kv_mask + slat_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"].cuda() * (1 - kv_mask)
+                k = k.type(q.dtype)
+                v = v.type(q.dtype)
     out = F.scaled_dot_product_attention(q, k, v)
     out = out.permute(0, 2, 1, 3)[0]
     h = h.replace(out)
@@ -427,53 +298,18 @@ def slat_attn_forward(
     h = self._linear(self.to_out, h)
     return h
 
-
-def slat_trsfmr_forward(
-    self,
-    x,
-    mod,
-    context,
-    slat_kv,
-    self_kv_mask,
-    cross_kv_mask,
-    t_latent,
-    order,
-    pos,
-    layer,
-):
+def slat_trsfmr_forward(self, x, mod, context, slat_kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, layer, is_text):
     if self.share_mod:
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod.chunk(
-            6, dim=1
-        )
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod.chunk(6, dim=1)
     else:
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.adaLN_modulation(mod).chunk(6, dim=1)
-        )
-
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(mod).chunk(6, dim=1)
     h = x.replace(self.norm1(x.feats))
     h = h * (1 + scale_msa) + shift_msa
-    h = self.self_attn(
-        h,
-        slat_kv=slat_kv,
-        kv_mask=self_kv_mask,
-        t_latent=t_latent,
-        order=order,
-        pos=pos,
-        layer=layer,
-    )
+    h = self.self_attn(h, slat_kv=slat_kv, kv_mask=self_kv_mask, t_latent=t_latent, order=order, pos=pos, layer=layer, is_text=is_text)
     h = h * gate_msa
     x = x + h
     h = x.replace(self.norm2(x.feats))
-    h = self.cross_attn(
-        h,
-        context,
-        slat_kv=slat_kv,
-        kv_mask=cross_kv_mask,
-        t_latent=t_latent,
-        order=order,
-        pos=pos,
-        layer=layer,
-    )
+    h = self.cross_attn(h, context, slat_kv=slat_kv, kv_mask=cross_kv_mask, t_latent=t_latent, order=order, pos=pos, layer=layer, is_text=is_text)
     x = x + h
     h = x.replace(self.norm3(x.feats))
     h = h * (1 + scale_mlp) + shift_mlp
@@ -482,38 +318,21 @@ def slat_trsfmr_forward(
     x = x + h
     return x
 
-
-def slat_flow_forward(
-    self, x, t, cond, slat_kv, self_kv_mask, cross_kv_mask, t_latent, order, pos
-):
+def slat_flow_forward(self, x, t, cond, slat_kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, is_text):
     h = self.input_layer(x).type(self.dtype)
     t_emb = self.t_embedder(t)
     if self.share_mod:
         t_emb = self.adaLN_modulation(t_emb)
     t_emb = t_emb.type(self.dtype)
     cond = cond.type(self.dtype)
-
     skips = []
     for block in self.input_blocks:
         h = block(h, t_emb)
         skips.append(h.feats)
-
     if self.pe_mode == "ape":
         h = h + self.pos_embedder(h.coords[:, 1:]).type(self.dtype)
     for layer, block in enumerate(self.blocks):
-        h = block(
-            h,
-            t_emb,
-            cond,
-            slat_kv,
-            self_kv_mask,
-            cross_kv_mask,
-            t_latent,
-            order,
-            pos,
-            layer,
-        )
-
+        h = block(h, t_emb, cond, slat_kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, layer, is_text)
     for block, skip in zip(self.out_blocks, reversed(skips)):
         if self.use_skip_connection:
             h = block(h.replace(torch.cat([h.feats, skip], dim=1)), t_emb)
@@ -523,163 +342,47 @@ def slat_flow_forward(
     h = self.out_layer(h.type(x.dtype))
     return h
 
-
 class InversionFlowEulerGuidanceIntervalSampler(FlowEulerGuidanceIntervalSampler):
-    def _inference_model(
-        self,
-        model,
-        sample,
-        t,
-        cond,
-        kv,
-        self_kv_mask,
-        cross_kv_mask,
-        t_latent,
-        order,
-        pos,
-    ):
-        t = torch.tensor(
-            [1000 * t] * sample.shape[0], device=sample.device, dtype=torch.float32
-        )
+    def _inference_model(self, model, sample, t, cond, kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, is_text):
+        t = torch.tensor([1000 * t] * sample.shape[0], device=sample.device, dtype=torch.float32)
         if cond is not None and cond.shape[0] == 1 and sample.shape[0] > 1:
             cond = cond.repeat(sample.shape[0], *([1] * (len(cond.shape) - 1)))
-        return model(
-            sample, t, cond, kv, self_kv_mask, cross_kv_mask, t_latent, order, pos
-        )
+        return model(sample, t, cond, kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, is_text)
 
-    def inference_model(
-        self,
-        model,
-        sample,
-        t,
-        cond,
-        cfg_strength,
-        kv,
-        self_kv_mask,
-        cross_kv_mask,
-        t_latent,
-        order,
-    ):
+    def inference_model(self, model, sample, t, cond, cfg_strength, kv, self_kv_mask, cross_kv_mask, t_latent, order, is_text):
         cfg_interval = [0.5, 1.0]
         if cfg_interval[0] <= t_latent <= cfg_interval[1]:
             pos = 1
-            pred = self._inference_model(
-                model,
-                sample,
-                t,
-                cond["cond"],
-                kv,
-                self_kv_mask,
-                cross_kv_mask,
-                t_latent,
-                order,
-                pos,
-            )
+            pred = self._inference_model(model, sample, t, cond["cond"], kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, is_text)
             pos = 0
-            neg_pred = self._inference_model(
-                model,
-                sample,
-                t,
-                cond["neg_cond"],
-                kv,
-                self_kv_mask,
-                cross_kv_mask,
-                t_latent,
-                order,
-                pos,
-            )
+            neg_pred = self._inference_model(model, sample, t, cond["neg_cond"], kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, is_text)
             return (1 + cfg_strength) * pred - cfg_strength * neg_pred
         else:
             pos = 1
-            return self._inference_model(
-                model,
-                sample,
-                t,
-                cond["cond"],
-                kv,
-                self_kv_mask,
-                cross_kv_mask,
-                t_latent,
-                order,
-                pos,
-            )
+            return self._inference_model(model, sample, t, cond["cond"], kv, self_kv_mask, cross_kv_mask, t_latent, order, pos, is_text)
 
-    def sample_once(
-        self,
-        model,
-        sample,
-        t_curr,
-        t_prev,
-        cond,
-        cfg_strength,
-        kv,
-        self_kv_mask,
-        cross_kv_mask,
-        t_latent,
-    ):
+    def sample_once(self, model, sample, t_curr, t_prev, cond, cfg_strength, kv, self_kv_mask, cross_kv_mask, t_latent, is_text):
         order = 1
-        pred = self.inference_model(
-            model,
-            sample,
-            t_curr,
-            cond,
-            cfg_strength,
-            kv,
-            self_kv_mask,
-            cross_kv_mask,
-            t_latent,
-            order,
-        )
+        pred = self.inference_model(model, sample, t_curr, cond, cfg_strength, kv, self_kv_mask, cross_kv_mask, t_latent, order, is_text)
         sample_mid = sample + (t_prev - t_curr) / 2 * pred
         t_mid = t_curr + (t_prev - t_curr) / 2
         order = 2
-        pred_mid = self.inference_model(
-            model,
-            sample_mid,
-            t_mid,
-            cond,
-            cfg_strength,
-            kv,
-            self_kv_mask,
-            cross_kv_mask,
-            t_latent,
-            order,
-        )
+        pred_mid = self.inference_model(model, sample_mid, t_mid, cond, cfg_strength, kv, self_kv_mask, cross_kv_mask, t_latent, order, is_text)
         first_order = (pred_mid - pred) / ((t_prev - t_curr) / 2)
-        sample = (
-            sample
-            + (t_prev - t_curr) * pred
-            - 0.5 * (t_prev - t_curr) ** 2 * first_order
-        )
+        sample = sample + (t_prev - t_curr) * pred - 0.5 * (t_prev - t_curr) ** 2 * first_order
         return sample
 
     @torch.no_grad()
-    def sample(
-        self,
-        model,
-        stage,
-        noise,
-        cond,
-        cfg_strength,
-        latent=None,
-        latent_mask=None,
-        kv=None,
-        self_kv_mask=None,
-        cross_kv_mask=None,
-        skip_step=None,
-        noise_init=None,
-    ):
+    def sample(self, model, stage, noise, cond, cfg_strength, latent=None, latent_mask=None, kv=None, self_kv_mask=None, cross_kv_mask=None, skip_step=None, noise_init=None, is_text=False):
         steps = 25
         rescale_t = 3.0
         sample = noise
         t_seq = np.linspace(1, 0, steps + 1)
         t_seq = rescale_t * t_seq / (1 + (rescale_t - 1) * t_seq)
-
         if latent_mask is None:
             inverse_bool = True
         else:
             inverse_bool = False
-
         if skip_step is not None:
             t_seq = t_seq[skip_step:]
             steps = steps - skip_step
@@ -687,7 +390,6 @@ class InversionFlowEulerGuidanceIntervalSampler(FlowEulerGuidanceIntervalSampler
             noise_randn = torch.randn_like(noise)
             t_init = t_seq[0]
             sample = noise_init * (1 - t_init) + noise_randn * t_init
-
         if inverse_bool:
             t_seq = t_seq[::-1]
             desc = "Inversing"
@@ -703,195 +405,88 @@ class InversionFlowEulerGuidanceIntervalSampler(FlowEulerGuidanceIntervalSampler
             else:
                 t_latent = t_curr
                 if stage == 1:
-                    sample = sample * latent_mask + latent[f"{t_latent}"].cuda() * (
-                        1 - latent_mask
-                    )
+                    sample = sample * latent_mask + latent[f"{t_latent}"].cuda() * (1 - latent_mask)
                 elif stage == 2:
-                    match_1 = (
-                        sample.coords.unsqueeze(1) == latent_mask.unsqueeze(0)
-                    ).all(dim=-1)
-                    match_2 = (
-                        latent[f"{t_latent}"].coords.cuda().unsqueeze(1)
-                        == latent_mask.unsqueeze(0)
-                    ).all(dim=-1)
+                    match_1 = (sample.coords.unsqueeze(1) == latent_mask.unsqueeze(0)).all(dim=-1)
+                    match_2 = (latent[f"{t_latent}"].coords.cuda().unsqueeze(1) == latent_mask.unsqueeze(0)).all(dim=-1)
                     idx_1 = match_1.float().argmax(0)
                     idx_2 = match_2.float().argmax(0)
                     feats = sample.feats.clone()
                     feats[idx_1] = latent[f"{t_latent}"].feats.cuda()[idx_2]
                     sample = sample.replace(feats)
-            sample = self.sample_once(
-                model,
-                sample,
-                t_curr,
-                t_prev,
-                cond,
-                cfg_strength,
-                kv,
-                self_kv_mask,
-                cross_kv_mask,
-                t_latent,
-            )
+            sample = self.sample_once(model, sample, t_curr, t_prev, cond, cfg_strength, kv, self_kv_mask, cross_kv_mask, t_latent, is_text)
             if inverse_bool:
                 latent[f"{t_latent}"] = sample.cpu()
         return sample, latent, kv
 
-
-def sample_sparse_structure_inverse(
-    pipeline, cond_src, voxel_src, cfg_strength_stage_1_inverse, skip_step
-):
+def sample_sparse_structure_inverse(pipeline, cond_src, voxel_src, cfg_strength_stage_1_inverse, skip_step, is_text):
     stage = 1
     flow_model = pipeline.models["sparse_structure_flow_model"]
     encoder = pipeline.models["sparse_structure_encoder"]
     z_s = encoder(voxel_src)
     sigma_min = pipeline.sparse_structure_sampler.sigma_min
     sparse_structure_sampler = InversionFlowEulerGuidanceIntervalSampler(sigma_min)
-
     if cfg_strength_stage_1_inverse is None:
         cfg_strength = pipeline.sparse_structure_sampler_params["cfg_strength"]
     else:
         cfg_strength = cfg_strength_stage_1_inverse
-
-    noise, ss_latent, ss_kv = sparse_structure_sampler.sample(
-        flow_model, stage, z_s, cond_src, cfg_strength, skip_step=skip_step
-    )
+    noise, ss_latent, ss_kv = sparse_structure_sampler.sample(flow_model, stage, z_s, cond_src, cfg_strength, skip_step=skip_step, is_text=is_text)
     return noise, ss_latent, ss_kv
 
-
-def sample_sparse_structure_denoise(
-    pipeline,
-    cond_tgt,
-    noise,
-    voxel_src,
-    voxel_mask,
-    ss_latent,
-    ss_latent_mask,
-    ss_kv,
-    ss_self_kv_mask,
-    ss_cross_kv_mask,
-    cfg_strength_stage_1_forward,
-    skip_step,
-    re_init,
-):
+def sample_sparse_structure_denoise(pipeline, cond_tgt, noise, voxel_src, voxel_mask, ss_latent, ss_latent_mask, ss_kv, ss_self_kv_mask, ss_cross_kv_mask, cfg_strength_stage_1_forward, skip_step, re_init, is_text):
     stage = 1
     flow_model = pipeline.models["sparse_structure_flow_model"]
     sigma_min = pipeline.sparse_structure_sampler.sigma_min
     sparse_structure_sampler = InversionFlowEulerGuidanceIntervalSampler(sigma_min)
-
     if cfg_strength_stage_1_forward is None:
         cfg_strength = pipeline.sparse_structure_sampler_params["cfg_strength"]
     else:
         cfg_strength = cfg_strength_stage_1_forward
-
     if re_init:
         encoder = pipeline.models["sparse_structure_encoder"]
         noise_init = encoder(voxel_src)
     else:
         noise_init = None
-
-    z_s, ss_latent, ss_kv = sparse_structure_sampler.sample(
-        flow_model,
-        stage,
-        noise,
-        cond_tgt,
-        cfg_strength,
-        ss_latent,
-        ss_latent_mask,
-        ss_kv,
-        ss_self_kv_mask,
-        ss_cross_kv_mask,
-        skip_step,
-        noise_init,
-    )
+    z_s, ss_latent, ss_kv = sparse_structure_sampler.sample(flow_model, stage, noise, cond_tgt, cfg_strength, ss_latent, ss_latent_mask, ss_kv, ss_self_kv_mask, ss_cross_kv_mask, skip_step, noise_init, is_text=is_text)
     decoder = pipeline.models["sparse_structure_decoder"]
     voxel = decoder(z_s)
     voxel = voxel * voxel_mask + voxel_src * (1 - voxel_mask)
     return voxel
 
-
-def sample_slat_inverse(
-    pipeline, cond_src, slat_src, coords_mask, cfg_strength_stage_2_inverse
-):
+def sample_slat_inverse(pipeline, cond_src, slat_src, coords_mask, cfg_strength_stage_2_inverse, is_text):
     stage = 2
-    coords_mask = torch.cat(
-        [torch.zeros(coords_mask.shape[0], 1).int().cuda(), coords_mask], dim=1
-    )
-    sparse_tensor_mask = torch.zeros(
-        slat_src.coords.shape[0], dtype=torch.bool, device="cuda"
-    )
+    coords_mask = torch.cat([torch.zeros(coords_mask.shape[0], 1).int().cuda(), coords_mask], dim=1)
+    sparse_tensor_mask = torch.zeros(slat_src.coords.shape[0], dtype=torch.bool, device="cuda")
     for coord in coords_mask:
         sparse_tensor_mask[torch.all(slat_src.coords == coord, dim=1)] = True
-    slat_inverse = slat_src.replace(
-        slat_src.feats[sparse_tensor_mask], slat_src.coords[sparse_tensor_mask]
-    )
-
+    slat_inverse = slat_src.replace(slat_src.feats[sparse_tensor_mask], slat_src.coords[sparse_tensor_mask])
     flow_model = pipeline.models["slat_flow_model"]
     std = torch.tensor(pipeline.slat_normalization["std"], device=pipeline.device)[None]
-    mean = torch.tensor(pipeline.slat_normalization["mean"], device=pipeline.device)[
-        None
-    ]
+    mean = torch.tensor(pipeline.slat_normalization["mean"], device=pipeline.device)[None]
     slat_inverse = (slat_inverse - mean) / std
-
     sigma_min = pipeline.slat_sampler.sigma_min
     slat_sampler = InversionFlowEulerGuidanceIntervalSampler(sigma_min)
-
     if cfg_strength_stage_2_inverse is None:
         cfg_strength = pipeline.sparse_structure_sampler_params["cfg_strength"]
     else:
         cfg_strength = cfg_strength_stage_2_inverse
-    noise, slat_latent, slat_kv = slat_sampler.sample(
-        flow_model, stage, slat_inverse, cond_src, cfg_strength
-    )
+    noise, slat_latent, slat_kv = slat_sampler.sample(flow_model, stage, slat_inverse, cond_src, cfg_strength, is_text=is_text)
     return slat_latent, slat_kv
 
-
-def sample_slat_denoise(
-    pipeline,
-    cond_tgt,
-    coords_tgt,
-    slat_src,
-    coords_mask,
-    slat_latent,
-    slat_kv,
-    slat_self_kv_mask,
-    slat_cross_kv_mask,
-    cfg_strength_stage_2_forward,
-):
+def sample_slat_denoise(pipeline, cond_tgt, coords_tgt, slat_src, coords_mask, slat_latent, slat_kv, slat_self_kv_mask, slat_cross_kv_mask, cfg_strength_stage_2_forward, is_text):
     stage = 2
-    coords_mask = torch.cat(
-        [torch.zeros(coords_mask.shape[0], 1).int().cuda(), coords_mask], dim=1
-    )
+    coords_mask = torch.cat([torch.zeros(coords_mask.shape[0], 1).int().cuda(), coords_mask], dim=1)
     flow_model = pipeline.models["slat_flow_model"]
-    noise = sp.SparseTensor(
-        feats=torch.randn(coords_tgt.shape[0], flow_model.in_channels).to(
-            pipeline.device
-        ),
-        coords=coords_tgt,
-    )
-
+    noise = sp.SparseTensor(feats=torch.randn(coords_tgt.shape[0], flow_model.in_channels).to(pipeline.device), coords=coords_tgt)
     sigma_min = pipeline.slat_sampler.sigma_min
     slat_sampler = InversionFlowEulerGuidanceIntervalSampler(sigma_min)
-
     if cfg_strength_stage_2_forward is None:
         cfg_strength = pipeline.sparse_structure_sampler_params["cfg_strength"]
     else:
         cfg_strength = cfg_strength_stage_2_forward
-    slat, slat_latent, slat_kv = slat_sampler.sample(
-        flow_model,
-        stage,
-        noise,
-        cond_tgt,
-        cfg_strength,
-        slat_latent,
-        coords_mask,
-        slat_kv,
-        slat_self_kv_mask,
-        slat_cross_kv_mask,
-    )
-
+    slat, slat_latent, slat_kv = slat_sampler.sample(flow_model, stage, noise, cond_tgt, cfg_strength, slat_latent, coords_mask, slat_kv, slat_self_kv_mask, slat_cross_kv_mask, is_text=is_text)
     std = torch.tensor(pipeline.slat_normalization["std"], device=pipeline.device)[None]
-    mean = torch.tensor(pipeline.slat_normalization["mean"], device=pipeline.device)[
-        None
-    ]
+    mean = torch.tensor(pipeline.slat_normalization["mean"], device=pipeline.device)[None]
     slat = slat * std + mean
 
     match_1 = (coords_tgt.unsqueeze(1) == coords_mask.unsqueeze(0)).all(dim=-1)
@@ -901,19 +496,9 @@ def sample_slat_denoise(
     feats = slat.feats.clone()
     feats[idx_1] = slat_src.feats[idx_2]
     slat = slat.replace(feats)
-
     return slat
 
-
-def run_edit(
-    pipeline,
-    render_dir,
-    image_dir,
-    output_path,
-    skip_step=0,
-    re_init=False,
-    cfg=[5.0, 6.0, 0.0, 0.0],
-):
+def run_edit(pipeline, render_dir, output_path, image_dir, is_text, source_prompt, target_prompt, skip_step=0, re_init=False, cfg=[5.0, 6.0, 0.0, 0.0]):
     ss_flow = pipeline.models["sparse_structure_flow_model"]
     ss_flow.forward = MethodType(ss_flow_forward, ss_flow)
     for block in ss_flow.blocks:
@@ -940,80 +525,43 @@ def run_edit(
     cfg_strength_stage_2_forward = cfg[3]
 
     # torch.manual_seed(0)
-
     coords_src = ply_to_coords(os.path.join(render_dir, "voxels.ply"))
     voxel_src = coords_to_voxel(coords_src)
     slat_src = feats_to_slat(pipeline, os.path.join(render_dir, "features.npz"))
-    img_src_path = os.path.join(image_dir, "2d_render.png")
-    img_tgt_path = os.path.join(image_dir, "2d_edit.png")
-    img_mask_path = os.path.join(image_dir, "2d_mask.png")
     ply_delete_path = os.path.join(render_dir, "voxels_delete.ply")
-
-    pre_src, pre_tgt, pre_mask = preprocess_image(
-        img_src_path, img_tgt_path, img_mask_path
-    )
-    cond_src = pipeline.get_cond([pre_src])
-    cond_tgt = pipeline.get_cond([pre_tgt])
+    if not is_text:
+        img_src_path = os.path.join(image_dir, "2d_render.png")
+        img_tgt_path = os.path.join(image_dir, "2d_edit.png")
+        img_mask_path = os.path.join(image_dir, "2d_mask.png")
+        pre_src, pre_tgt, pre_mask = preprocess_image(img_src_path, img_tgt_path, img_mask_path)
+        cond_src = pipeline.get_cond([pre_src])
+        cond_tgt = pipeline.get_cond([pre_tgt])
+    else:
+        pre_mask = None
+        cond_src = pipeline.get_cond([source_prompt])
+        cond_tgt = pipeline.get_cond([target_prompt])
     coords_delete = ply_to_coords(ply_delete_path)
     coords_preserve = coords_src[~torch.isin(coords_src, coords_delete).all(dim=1)]
 
-    voxel_mask, ss_latent_mask, ss_self_kv_mask, cross_kv_mask = ply_to_ss_mask(
-        coords_preserve, pre_mask
-    )
-    noise, ss_latent, ss_kv = sample_sparse_structure_inverse(
-        pipeline, cond_src, voxel_src, cfg_strength_stage_1_inverse, skip_step
-    )
-    voxel_tgt = sample_sparse_structure_denoise(
-        pipeline,
-        cond_tgt,
-        noise,
-        voxel_src,
-        voxel_mask,
-        ss_latent,
-        ss_latent_mask,
-        ss_kv,
-        ss_self_kv_mask,
-        cross_kv_mask,
-        cfg_strength_stage_1_forward,
-        skip_step,
-        re_init,
-    )
+    voxel_mask, ss_latent_mask, ss_self_kv_mask, cross_kv_mask = ply_to_ss_mask(coords_preserve, pre_mask)
+    noise, ss_latent, ss_kv = sample_sparse_structure_inverse(pipeline, cond_src, voxel_src, cfg_strength_stage_1_inverse, skip_step, is_text)
+    voxel_tgt = sample_sparse_structure_denoise(pipeline, cond_tgt, noise, voxel_src, voxel_mask, ss_latent, ss_latent_mask, ss_kv, ss_self_kv_mask, cross_kv_mask, cfg_strength_stage_1_forward, skip_step, re_init, is_text)
     coords_tgt = torch.argwhere(voxel_tgt > 0)[:, [0, 2, 3, 4]].int()
 
     slat_self_kv_mask = ply_to_slat_mask(coords_tgt, coords_preserve)
-    slat_latent, slat_kv = sample_slat_inverse(
-        pipeline, cond_src, slat_src, coords_preserve, cfg_strength_stage_2_inverse
-    )
-    slat_tgt = sample_slat_denoise(
-        pipeline,
-        cond_tgt,
-        coords_tgt,
-        slat_src,
-        coords_preserve,
-        slat_latent,
-        slat_kv,
-        slat_self_kv_mask,
-        cross_kv_mask,
-        cfg_strength_stage_2_forward,
-    )
+    slat_latent, slat_kv = sample_slat_inverse(pipeline, cond_src, slat_src, coords_preserve, cfg_strength_stage_2_inverse, is_text)
+    slat_tgt = sample_slat_denoise(pipeline, cond_tgt, coords_tgt, slat_src, coords_preserve, slat_latent, slat_kv, slat_self_kv_mask, cross_kv_mask, cfg_strength_stage_2_forward, is_text)
     assets_tgt = pipeline.decode_slat(slat_tgt, ["gaussian", "mesh"])
 
     torch.set_grad_enabled(True)
-    glb_tgt = postprocessing_utils.to_glb(
-        assets_tgt["gaussian"][0],
-        assets_tgt["mesh"][0],
-        simplify=0.95,
-        texture_size=1024,
-    )
+    glb_tgt = postprocessing_utils.to_glb(assets_tgt["gaussian"][0], assets_tgt["mesh"][0], simplify=0.95, texture_size=1024)
     glb_tgt.export(output_path)
 
-
 if __name__ == "__main__":
-    pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
+    is_text = False
+    if is_text:
+        pipeline = TrellisTextTo3DPipeline.from_pretrained("microsoft/TRELLIS-text-large")
+    else:
+        pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
     pipeline.cuda()
-    run_edit(
-        pipeline,
-        render_dir="/path/to/render",
-        image_dir="/path/to/image",
-        output_path="/path/to/output.glb",
-    )
+    run_edit(pipeline, render_dir="/path/to/render", output_path="/path/to/output.glb", image_dir="/path/to/image", is_text=is_text, source_prompt="", target_prompt="")
