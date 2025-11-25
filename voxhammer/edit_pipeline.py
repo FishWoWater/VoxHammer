@@ -20,7 +20,6 @@ from trellis.modules.spatial import patchify, unpatchify
 from trellis.pipelines import TrellisTextTo3DPipeline, TrellisImageTo3DPipeline
 from trellis.pipelines.samplers.flow_euler import FlowEulerGuidanceIntervalSampler
 
-
 def ply_to_coords(ply_path):
     position = utils3d.io.read_ply(ply_path)[0]
     coords = ((torch.tensor(position) + 0.5) * 64).int().contiguous().cuda()
