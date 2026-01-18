@@ -39,14 +39,14 @@ class TrellisTextTo3DPipeline(Pipeline):
         self._init_text_cond_model(text_cond_model)
 
     @staticmethod
-    def from_pretrained(path: str) -> "TrellisTextTo3DPipeline":
+    def from_pretrained(path: str, cache_dir: str = "") -> "TrellisTextTo3DPipeline":
         """
         Load a pretrained model.
 
         Args:
             path (str): The path to the model. Can be either local path or a Hugging Face repository.
         """
-        pipeline = super(TrellisTextTo3DPipeline, TrellisTextTo3DPipeline).from_pretrained(path)
+        pipeline = super(TrellisTextTo3DPipeline, TrellisTextTo3DPipeline).from_pretrained(path, cache_dir=cache_dir)
         new_pipeline = TrellisTextTo3DPipeline()
         new_pipeline.__dict__ = pipeline.__dict__
         args = pipeline._pretrained_args

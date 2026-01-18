@@ -227,7 +227,7 @@ def postprocess_mesh(
     """
 
     if verbose:
-        tqdm.write(f'Before postprocess: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
+        tqdm.write(f'[VoxHammer TRELLIS] Before postprocess: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
 
     # Simplify
     if simplify and simplify_ratio > 0:

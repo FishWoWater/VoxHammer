@@ -35,7 +35,7 @@ def render_model(input_model, output_dir):
     # scene_manager.normalize_scene(1.0) # Not normalize here
 
     # 3. Set environment
-    set_env_map("assets/preset/brown_photostudio_02_1k.exr")
+    set_env_map("thirdparty/VoxHammer/assets/preset/brown_photostudio_02_1k.exr")
     # set_background_color([1.0, 1.0, 1.0, 1.0])
 
     # 4. Prepare cameras

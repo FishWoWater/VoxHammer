@@ -19,19 +19,22 @@ class Pipeline:
             model.eval()
 
     @staticmethod
-    def from_pretrained(path: str) -> "Pipeline":
+    def from_pretrained(path: str, cache_dir: str = "") -> "Pipeline":
         """
         Load a pretrained model.
         """
         import os
         import json
+        if os.path.exists(f"{cache_dir}/pipeline.json"):
+            path = cache_dir
+
         is_local = os.path.exists(f"{path}/pipeline.json")
 
         if is_local:
             config_file = f"{path}/pipeline.json"
         else:
             from huggingface_hub import hf_hub_download
-            config_file = hf_hub_download(path, "pipeline.json")
+            config_file = hf_hub_download(path, "pipeline.json", cache_dir=cache_dir)
 
         with open(config_file, 'r') as f:
             args = json.load(f)['args']

@@ -462,6 +462,7 @@ def sample_slat_inverse(pipeline, cond_src, slat_src, coords_mask, cfg_strength_
     flow_model = pipeline.models["slat_flow_model"]
     std = torch.tensor(pipeline.slat_normalization["std"], device=pipeline.device)[None]
     mean = torch.tensor(pipeline.slat_normalization["mean"], device=pipeline.device)[None]
+    # print(slat_inverse.shape, mean.shape, std.shape)
     slat_inverse = (slat_inverse - mean) / std
     sigma_min = pipeline.slat_sampler.sigma_min
     slat_sampler = InversionFlowEulerGuidanceIntervalSampler(sigma_min)
@@ -553,7 +554,10 @@ def run_edit(pipeline, render_dir, output_path, image_dir, is_text, source_promp
     assets_tgt = pipeline.decode_slat(slat_tgt, ["gaussian", "mesh"])
 
     torch.set_grad_enabled(True)
-    glb_tgt = postprocessing_utils.to_glb(assets_tgt["gaussian"][0], assets_tgt["mesh"][0], simplify=0.95, texture_size=1024)
+    try:
+        glb_tgt = postprocessing_utils.to_glb(assets_tgt["gaussian"][0], assets_tgt["mesh"][0], simplify=0.95, texture_size=1024)
+    except:
+        glb_tgt = postprocessing_utils.to_trimesh(assets_tgt["gaussian"][0], assets_tgt["mesh"][0], simplify=0.95, texture_size=1024, forward_rot=False)
     glb_tgt.export(output_path)
 
 if __name__ == "__main__":

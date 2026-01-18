@@ -46,7 +46,7 @@ class TrellisImageTo3DPipeline(Pipeline):
         self._init_image_cond_model(image_cond_model)
 
     @staticmethod
-    def from_pretrained(path: str) -> "TrellisImageTo3DPipeline":
+    def from_pretrained(path: str, cache_dir: str = "") -> "TrellisImageTo3DPipeline":
         """
         Load a pretrained model.
 
@@ -55,7 +55,7 @@ class TrellisImageTo3DPipeline(Pipeline):
         """
         pipeline = super(
             TrellisImageTo3DPipeline, TrellisImageTo3DPipeline
-        ).from_pretrained(path)
+        ).from_pretrained(path, cache_dir=cache_dir)
         new_pipeline = TrellisImageTo3DPipeline()
         new_pipeline.__dict__ = pipeline.__dict__
         args = pipeline._pretrained_args

@@ -14,7 +14,7 @@ def glb_to_ply(input_glb_path, input_ply_path):
     bpy.ops.wm.ply_export(filepath=input_ply_path, export_normals=True, ascii_format=True)
 
 def process_delete_ply(input_glb_path, render_dir, filter_method="volume", voxel_size=1/64):
-    preset_voxel_path = "assets/preset/preset_grid64.ply"
+    preset_voxel_path = "thirdparty/VoxHammer/assets/preset/preset_grid64.ply"
     input_ply_path = os.path.join(render_dir, "mesh_delete.ply")
     output_ply_path = os.path.join(render_dir, "voxels_delete.ply")
     glb_to_ply(input_glb_path, input_ply_path)
